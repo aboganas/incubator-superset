@@ -1,4 +1,20 @@
 #!/usr/bin/env python
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
 # pylint: disable=C,R,W
 from datetime import datetime
 import logging
@@ -112,15 +128,16 @@ def runserver(debug, console_log, use_reloader, address, port, timeout, workers,
         logging.info(
             "The Gunicorn 'superset runserver' command is deprecated. Please "
             "use the 'gunicorn' command instead.")
-        addr_str = ' unix:{socket} ' if socket else' {address}:{port} '
+        addr_str = f' unix:{socket} ' if socket else f' {address}:{port} '
         cmd = (
             'gunicorn '
-            '-w {workers} '
-            '--timeout {timeout} '
-            '-b ' + addr_str +
+            f'-w {workers} '
+            f'--timeout {timeout} '
+            f'-b {addr_str} '
             '--limit-request-line 0 '
             '--limit-request-field_size 0 '
-            'superset:app').format(**locals())
+            'superset:app'
+        )
         print(Fore.GREEN + 'Starting server with command: ')
         print(Fore.YELLOW + cmd)
         print(Style.RESET_ALL)
@@ -404,10 +421,10 @@ def flower(port, address):
     BROKER_URL = celery_app.conf.BROKER_URL
     cmd = (
         'celery flower '
-        '--broker={BROKER_URL} '
-        '--port={port} '
-        '--address={address} '
-    ).format(**locals())
+        f'--broker={BROKER_URL} '
+        f'--port={port} '
+        f'--address={address} '
+    )
     logging.info(
         "The 'superset flower' command is deprecated. Please use the 'celery "
         "flower' command instead.")

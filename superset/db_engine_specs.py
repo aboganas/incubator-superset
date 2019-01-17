@@ -1,3 +1,19 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
 # pylint: disable=C,R,W
 """Compatibility layer for different database engines
 
@@ -20,7 +36,6 @@ import re
 import textwrap
 import time
 
-import boto3
 from flask import g
 from flask_babel import lazy_gettext as _
 import pandas
@@ -149,18 +164,18 @@ class BaseEngineSpec(object):
             )
             return database.compile_sqla_query(qry)
         elif LimitMethod.FORCE_LIMIT:
-            parsed_query = sql_parse.SupersetQuery(sql)
+            parsed_query = sql_parse.ParsedQuery(sql)
             sql = parsed_query.get_query_with_new_limit(limit)
         return sql
 
     @classmethod
     def get_limit_from_sql(cls, sql):
-        parsed_query = sql_parse.SupersetQuery(sql)
+        parsed_query = sql_parse.ParsedQuery(sql)
         return parsed_query.limit
 
     @classmethod
     def get_query_with_new_limit(cls, sql, limit):
-        parsed_query = sql_parse.SupersetQuery(sql)
+        parsed_query = sql_parse.ParsedQuery(sql)
         return parsed_query.get_query_with_new_limit(limit)
 
     @staticmethod
@@ -486,13 +501,13 @@ class OracleEngineSpec(PostgresBaseEngineSpec):
     time_grain_functions = {
         None: '{col}',
         'PT1S': 'CAST({col} as DATE)',
-        'PT1M': "TRUNC(TO_DATE({col}), 'MI')",
-        'PT1H': "TRUNC(TO_DATE({col}), 'HH')",
-        'P1D': "TRUNC(TO_DATE({col}), 'DDD')",
-        'P1W': "TRUNC(TO_DATE({col}), 'WW')",
-        'P1M': "TRUNC(TO_DATE({col}), 'MONTH')",
-        'P0.25Y': "TRUNC(TO_DATE({col}), 'Q')",
-        'P1Y': "TRUNC(TO_DATE({col}), 'YEAR')",
+        'PT1M': "TRUNC(CAST({col} as DATE), 'MI')",
+        'PT1H': "TRUNC(CAST({col} as DATE), 'HH')",
+        'P1D': "TRUNC(CAST({col} as DATE), 'DDD')",
+        'P1W': "TRUNC(CAST({col} as DATE), 'WW')",
+        'P1M': "TRUNC(CAST({col} as DATE), 'MONTH')",
+        'P0.25Y': "TRUNC(CAST({col} as DATE), 'Q')",
+        'P1Y': "TRUNC(CAST({col} as DATE), 'YEAR')",
     }
 
     @classmethod
@@ -687,6 +702,16 @@ class PrestoEngineSpec(BaseEngineSpec):
     }
 
     @classmethod
+    def get_view_names(cls, inspector, schema):
+        """Returns an empty list
+
+        get_table_names() function returns all table names and view names,
+        and get_view_names() is not implemented in sqlalchemy_presto.py
+        https://github.com/dropbox/PyHive/blob/e25fc8440a0686bbb7a5db5de7cb1a77bdb4167a/pyhive/sqlalchemy_presto.py
+        """
+        return []
+
+    @classmethod
     def adjust_database_uri(cls, uri, selected_schema=None):
         database = uri.database
         if selected_schema and database:
@@ -838,15 +863,15 @@ class PrestoEngineSpec(BaseEngineSpec):
         if filters:
             l = []  # noqa: E741
             for field, value in filters.items():
-                l.append("{field} = '{value}'".format(**locals()))
+                l.append(f"{field} = '{value}'")
             where_clause = 'WHERE ' + ' AND '.join(l)
 
-        sql = textwrap.dedent("""\
+        sql = textwrap.dedent(f"""\
             SHOW PARTITIONS FROM {table_name}
             {where_clause}
             {order_by_clause}
             {limit_clause}
-        """).format(**locals())
+        """)
         return sql
 
     @classmethod
@@ -975,7 +1000,7 @@ class HiveEngineSpec(PrestoEngineSpec):
 
     @classmethod
     def patch(cls):
-        from pyhive import hive
+        from pyhive import hive  # pylint: disable=no-name-in-module
         from superset.db_engines import hive as patched_hive
         from TCLIService import (
             constants as patched_constants,
@@ -1055,15 +1080,18 @@ class HiveEngineSpec(PrestoEngineSpec):
                     convert_to_hive_type(column_info['type'])))
         schema_definition = ', '.join(column_name_and_type)
 
+        # Optional dependency
+        import boto3  # pylint: disable=import-error
+
         s3 = boto3.client('s3')
         location = os.path.join('s3a://', bucket_path, upload_prefix, table_name)
         s3.upload_file(
             upload_path, bucket_path,
             os.path.join(upload_prefix, table_name, filename))
-        sql = """CREATE TABLE {full_table_name} ( {schema_definition} )
+        sql = f"""CREATE TABLE {full_table_name} ( {schema_definition} )
             ROW FORMAT DELIMITED FIELDS TERMINATED BY ',' STORED AS
             TEXTFILE LOCATION '{location}'
-            tblproperties ('skip.header.line.count'='1')""".format(**locals())
+            tblproperties ('skip.header.line.count'='1')"""
         logging.info(form.con.data)
         engine = create_engine(form.con.data.sqlalchemy_uri_decrypted)
         engine.execute(sql)
@@ -1135,7 +1163,7 @@ class HiveEngineSpec(PrestoEngineSpec):
     @classmethod
     def handle_cursor(cls, cursor, query, session):
         """Updates progress information"""
-        from pyhive import hive
+        from pyhive import hive  # pylint: disable=no-name-in-module
         unfinished_states = (
             hive.ttypes.TOperationState.INITIALIZED_STATE,
             hive.ttypes.TOperationState.RUNNING_STATE,
@@ -1210,7 +1238,7 @@ class HiveEngineSpec(PrestoEngineSpec):
     @classmethod
     def _partition_query(
             cls, table_name, limit=0, order_by=None, filters=None):
-        return 'SHOW PARTITIONS {table_name}'.format(**locals())
+        return f'SHOW PARTITIONS {table_name}'
 
     @classmethod
     def modify_url_for_impersonation(cls, url, impersonate_user, username):
@@ -1274,6 +1302,13 @@ class MssqlEngineSpec(BaseEngineSpec):
     @classmethod
     def convert_dttm(cls, target_type, dttm):
         return "CONVERT(DATETIME, '{}', 126)".format(dttm.isoformat())
+
+    @classmethod
+    def fetch_data(cls, cursor, limit):
+        data = super(MssqlEngineSpec, cls).fetch_data(cursor, limit)
+        if len(data) != 0 and type(data[0]).__name__ == 'Row':
+            data = [[elem for elem in r] for r in data]
+        return data
 
 
 class AthenaEngineSpec(BaseEngineSpec):
@@ -1489,6 +1524,13 @@ class DruidEngineSpec(BaseEngineSpec):
     }
 
 
+class GSheetsEngineSpec(SqliteEngineSpec):
+    """Engine for Google spreadsheets"""
+    engine = 'gsheets'
+    inner_joins = False
+    allows_subquery = False
+
+
 class KylinEngineSpec(BaseEngineSpec):
     """Dialect for Apache Kylin"""
 
@@ -1524,16 +1566,16 @@ class TeradataEngineSpec(BaseEngineSpec):
     engine = 'teradata'
     limit_method = LimitMethod.WRAP_SQL
 
-    time_grains = (
-        Grain('Time Column', _('Time Column'), '{col}', None),
-        Grain('minute', _('minute'), "TRUNC(CAST({col} as DATE), 'MI')", 'PT1M'),
-        Grain('hour', _('hour'), "TRUNC(CAST({col} as DATE), 'HH')", 'PT1H'),
-        Grain('day', _('day'), "TRUNC(CAST({col} as DATE), 'DDD')", 'P1D'),
-        Grain('week', _('week'), "TRUNC(CAST({col} as DATE), 'WW')", 'P1W'),
-        Grain('month', _('month'), "TRUNC(CAST({col} as DATE), 'MONTH')", 'P1M'),
-        Grain('quarter', _('quarter'), "TRUNC(CAST({col} as DATE), 'Q')", 'P0.25Y'),
-        Grain('year', _('year'), "TRUNC(CAST({col} as DATE), 'YEAR')", 'P1Y'),
-    )
+    time_grain_functions = {
+        None: '{col}',
+        'PT1M': "TRUNC(CAST({col} as DATE), 'MI')",
+        'PT1H': "TRUNC(CAST({col} as DATE), 'HH')",
+        'P1D': "TRUNC(CAST({col} as DATE), 'DDD')",
+        'P1W': "TRUNC(CAST({col} as DATE), 'WW')",
+        'P1M': "TRUNC(CAST({col} as DATE), 'MONTH')",
+        'P0.25Y': "TRUNC(CAST({col} as DATE), 'Q')",
+        'P1Y': "TRUNC(CAST({col} as DATE), 'YEAR')",
+    }
 
 
 engines = {

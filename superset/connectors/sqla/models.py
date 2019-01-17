@@ -1,3 +1,19 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
 # pylint: disable=C,R,W
 from datetime import datetime
 import logging
@@ -9,7 +25,7 @@ import pandas as pd
 import sqlalchemy as sa
 from sqlalchemy import (
     and_, asc, Boolean, Column, DateTime, desc, ForeignKey, Integer, or_,
-    select, String, Text,
+    select, String, Table, Text,
 )
 from sqlalchemy.exc import CompileError
 from sqlalchemy.orm import backref, relationship
@@ -27,6 +43,7 @@ from superset.models.helpers import QueryResult
 from superset.utils import core as utils, import_datasource
 
 config = app.config
+metadata = Model.metadata  # pylint: disable=no-member
 
 
 class AnnotationDatasource(BaseDatasource):
@@ -85,7 +102,7 @@ class TableColumn(Model, BaseColumn):
 
     export_fields = (
         'table_id', 'column_name', 'verbose_name', 'is_dttm', 'is_active',
-        'type', 'groupby', 'count_distinct', 'sum', 'avg', 'max', 'min',
+        'type', 'groupby',
         'filterable', 'expression', 'description', 'python_date_format',
         'database_expression',
     )
@@ -168,43 +185,6 @@ class TableColumn(Model, BaseColumn):
                 self.type or '', dttm)
             return s or "'{}'".format(dttm.strftime('%Y-%m-%d %H:%M:%S.%f'))
 
-    def get_metrics(self):
-        # TODO deprecate, this is not needed since MetricsControl
-        metrics = []
-        M = SqlMetric  # noqa
-        quoted = self.column_name
-        if self.sum:
-            metrics.append(M(
-                metric_name='sum__' + self.column_name,
-                metric_type='sum',
-                expression='SUM({})'.format(quoted),
-            ))
-        if self.avg:
-            metrics.append(M(
-                metric_name='avg__' + self.column_name,
-                metric_type='avg',
-                expression='AVG({})'.format(quoted),
-            ))
-        if self.max:
-            metrics.append(M(
-                metric_name='max__' + self.column_name,
-                metric_type='max',
-                expression='MAX({})'.format(quoted),
-            ))
-        if self.min:
-            metrics.append(M(
-                metric_name='min__' + self.column_name,
-                metric_type='min',
-                expression='MIN({})'.format(quoted),
-            ))
-        if self.count_distinct:
-            metrics.append(M(
-                metric_name='count_distinct__' + self.column_name,
-                metric_type='count_distinct',
-                expression='COUNT(DISTINCT {})'.format(quoted),
-            ))
-        return {m.metric_name: m for m in metrics}
-
 
 class SqlMetric(Model, BaseMetric):
 
@@ -250,6 +230,14 @@ class SqlMetric(Model, BaseMetric):
         return import_datasource.import_simple_obj(db.session, i_metric, lookup_obj)
 
 
+sqlatable_user = Table(
+    'sqlatable_user', metadata,
+    Column('id', Integer, primary_key=True),
+    Column('user_id', Integer, ForeignKey('ab_user.id')),
+    Column('table_id', Integer, ForeignKey('tables.id')),
+)
+
+
 class SqlaTable(Model, BaseDatasource):
 
     """An ORM object for SqlAlchemy table references"""
@@ -258,6 +246,7 @@ class SqlaTable(Model, BaseDatasource):
     query_language = 'sql'
     metric_class = SqlMetric
     column_class = TableColumn
+    owner_class = security_manager.user_model
 
     __tablename__ = 'tables'
     __table_args__ = (UniqueConstraint('database_id', 'table_name'),)
@@ -266,11 +255,7 @@ class SqlaTable(Model, BaseDatasource):
     main_dttm_col = Column(String(250))
     database_id = Column(Integer, ForeignKey('dbs.id'), nullable=False)
     fetch_values_predicate = Column(String(1000))
-    user_id = Column(Integer, ForeignKey('ab_user.id'))
-    owner = relationship(
-        security_manager.user_model,
-        backref='tables',
-        foreign_keys=[user_id])
+    owners = relationship(owner_class, secondary=sqlatable_user, backref='tables')
     database = relationship(
         'Database',
         backref=backref('tables', cascade='all, delete-orphan'),
@@ -324,8 +309,8 @@ class SqlaTable(Model, BaseDatasource):
     @property
     def link(self):
         name = escape(self.name)
-        anchor = '<a target="_blank" href="{self.explore_url}">{name}</a>'
-        return Markup(anchor.format(**locals()))
+        anchor = f'<a target="_blank" href="{self.explore_url}">{name}</a>'
+        return Markup(anchor)
 
     @property
     def schema_perm(self):
@@ -856,7 +841,6 @@ class SqlaTable(Model, BaseDatasource):
             self.columns.append(dbcol)
             if not any_date_col and dbcol.is_time:
                 any_date_col = col.name
-            metrics += dbcol.get_metrics().values()
 
         metrics.append(M(
             metric_name='count',
